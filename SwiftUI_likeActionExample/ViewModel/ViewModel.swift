@@ -98,7 +98,6 @@ class ViewModel: ObservableObject {
               // 代替データを提供するか、エラーを投げるなどの処理を行う
               return Just([]).setFailureType(to: Error.self).eraseToAnyPublisher()
           }
-          .receive(on: RunLoop.main)
           .eraseToAnyPublisher()
     }
     
