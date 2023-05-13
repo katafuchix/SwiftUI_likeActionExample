@@ -51,17 +51,23 @@ class ViewModel: ObservableObject {
         
         // searchSubjectから呼ばれる検索処理
         searchPublisher
-            .flatMap { searchText -> AnyPublisher<[Cocktail], Error>  in
+            // flatMapの後にはAnyPublisher<T, Never>の型を返す必要があります。
+            //これにより、エラーハンドリングなどでエラーをキャッチして処理することができ、ストリームが正常に継続して流れるようになります。
+            .flatMap { searchText -> AnyPublisher<Result<[Cocktail], Error>, Never> in
                 self.isSearching = true
                 // ネットワークリクエストなどの非同期処理を行うPublisherを返す
                 return self.searchAction(query: searchText)
+                    .map { Result<[Cocktail], Error>.success($0) }
+                    .catch { Just(Result<[Cocktail], Error>.failure($0)) }
+                    .eraseToAnyPublisher()
             }
-            .sink(receiveCompletion: { completion in
-                switch completion {
-                case .finished:
+            .sink(receiveValue: { result in
+                switch result {
+                case .success(let response):
                     // 成功時の処理
-                    print("finished")
-                    break
+                    self.isSearching = false
+                    self.result = response
+                    print("Received search response: \(response)")
                 case .failure(let error):
                     // エラー時の処理
                     print("Search failed with error: \(error)")
@@ -69,13 +75,32 @@ class ViewModel: ObservableObject {
                     self.showErrorAlert = true
                     self.error = error
                 }
-            }, receiveValue: { response in
-                // 成功時の処理
-                self.isSearching = false
-                self.result = response
-                print("Received search response: \(response)")
             })
             .store(in: &cancellables)
+        
+            // sink(receiveCompletion:)はAnyCancellableを返すため、エラーハンドリングを行う場合には利用できません。
+            // 使う場合のコード
+            /*searchPublisher
+                .flatMap { searchText -> AnyPublisher<[Cocktail], Never>  in
+                    self.isSearching = true
+                    // ネットワークリクエストなどの非同期処理を行うPublisherを返す
+                    return self.searchAction(query: searchText)
+                        .catch { error -> Just<[Cocktail]> in
+                            // エラーハンドリングの処理を行う
+                            self.isSearching = false
+                            self.showErrorAlert = true
+                            self.error = error
+                            return Just([]) // エラー時に空の配列を返す
+                        }
+                        .eraseToAnyPublisher()
+                }
+                .sink(receiveValue: { response in
+                    // 成功時の処理
+                    self.isSearching = false
+                    self.result = response
+                    print("Received search response: \(response)")
+                })
+                .store(in: &cancellables)*/
     }
 
     // flatMapのクロージャ内で明示的に 戻り値の型 AnyPublisher<[Cocktail], Never> を指定しないと
@@ -88,16 +113,9 @@ class ViewModel: ObservableObject {
           .decode(type: CocktailSearchResult.self, decoder: JSONDecoder())
           .map(\.drinks)
           .receive(on: DispatchQueue.main) // メインスレッドで値の発行を行う
-          .catch { [weak self] error -> AnyPublisher<[Cocktail], Error> in
-              // エラーハンドリング メインスレッドで行うようにする
-              // Publishing changes from background threads is not allowed;
-              // make sure to publish values from the main thread (via operators like receive(on:)) on model updates.
-              self?.isSearching = false
-              self?.showErrorAlert = true
-              self?.error = error
-              // 代替データを提供するか、エラーを投げるなどの処理を行う
-              return Just([]).setFailureType(to: Error.self).eraseToAnyPublisher()
-          }
+          .mapError { error -> Error in
+                      return error
+                  }
           .eraseToAnyPublisher()
     }
     
